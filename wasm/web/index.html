@@ -42,6 +42,13 @@
     canvas: document.getElementById('canvas'),
     print: log,
     printErr: log,
+    // ?env=KEY=VAL,KEY2=VAL2 sets getenv() values for debugging toggles
+    preRun: [() => {
+      for (const kv of (new URLSearchParams(location.search).get('env') || '').split(',').filter(Boolean)) {
+        const [k, v = '1'] = kv.split('=');
+        Module.ENV[k] = v;
+      }
+    }],
     onPandaReady: async () => {
       statusEl.textContent = 'ready';
       const rom = new URLSearchParams(location.search).get('rom');

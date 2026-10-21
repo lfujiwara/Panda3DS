@@ -20,7 +20,7 @@ page.on('console', (m) => logs.push(m.text()));
 page.on('pageerror', (e) => logs.push('PAGEERROR ' + e.message));
 
 const t0 = Date.now();
-await page.goto(`http://127.0.0.1:8301/index.html?rom=${encodeURIComponent(rom)}`);
+await page.goto(`http://127.0.0.1:8301/index.html?rom=${encodeURIComponent(rom)}&env=${encodeURIComponent(process.env.PANDA_ENV ?? '')}`);
 try {
   await page.waitForFunction(() => window.pandaReady === true, null, { timeout: 60000 });
 } catch (e) {
@@ -59,6 +59,7 @@ const colors = await page.evaluate(async () => {
   for (let i = 0; i < d.length; i += 4) set.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]);
   return set.size;
 });
-console.log(logs.slice(-40).join('\n'));
+fs.writeFileSync(out.replace(/\.png$/, '') + '.log', logs.join('\n'));
+console.log(logs.filter((l) => !l.includes('GPU stall')).slice(-25).join('\n'));
 console.log(`[smoke] ${rom}: frames=${info.frames} pc=${info.pc} wall=${secs.toFixed(1)}s fps=${(info.frames / secs).toFixed(1)} canvasColors=${colors} -> ${out}`);
 await browser.close();

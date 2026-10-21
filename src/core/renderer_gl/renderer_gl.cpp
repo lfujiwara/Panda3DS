@@ -547,6 +547,9 @@ void RendererGL::display() {
 	gl.disableClipPlane(0);
 	gl.disableClipPlane(1);
 
+	// With no GPU work this frame, read+draw are both still screenFramebuffer from last frame; WebGL then rejects the
+	// final blit as a feedback loop unless both bindings are reset first
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 	screenFramebuffer.bind(OpenGL::DrawFramebuffer);
 	gl.setClearColour(0.f, 0.f, 0.f, 1.f);
 	OpenGL::clearColor();
@@ -560,6 +563,9 @@ void RendererGL::display() {
 		topScreen->get().texture.bind();
 		OpenGL::setViewport(0, 240, 400, 240);   // Top screen viewport
 		OpenGL::draw(OpenGL::TriangleStrip, 4);  // Actually draw our 3DS screen
+	} else if (uploadCPUFramebuffer(0, topScreenAddr, externalRegs[Framebuffer0Config], externalRegs[Framebuffer0Stride])) {
+		OpenGL::setViewport(0, 240, 400, 240);
+		OpenGL::draw(OpenGL::TriangleStrip, 4);
 	}
 
 	const u32 bottomActiveFb = externalRegs[Framebuffer1Select] & 1;
@@ -568,6 +574,9 @@ void RendererGL::display() {
 
 	if (bottomScreen) {
 		bottomScreen->get().texture.bind();
+		OpenGL::setViewport(40, 0, 320, 240);
+		OpenGL::draw(OpenGL::TriangleStrip, 4);
+	} else if (uploadCPUFramebuffer(1, bottomScreenAddr, externalRegs[Framebuffer1Config], externalRegs[Framebuffer1Stride])) {
 		OpenGL::setViewport(40, 0, 320, 240);
 		OpenGL::draw(OpenGL::TriangleStrip, 4);
 	}
@@ -1328,6 +1337,54 @@ void RendererGL::accelerateVertexUpload(ShaderUnit& shaderUnit, PICA::DrawAccele
 			);
 		}
 	}
+}
+
+// LCD framebuffers are stored rotated: each 240-pixel screen column is contiguous in memory, bottom pixel first.
+// The display shader expects GPU colour buffer orientation, which has the columns in reverse order.
+bool RendererGL::uploadCPUFramebuffer(int screen, u32 addr, u32 config, u32 stride) {
+	static constexpr int bytesPerPixel[8] = {4, 3, 2, 2, 2, 0, 0, 0};
+	const u32 format = config & 7;
+	const int columns = screen == 0 ? 400 : 320;
+	const int bpp = bytesPerPixel[format];
+	if (bpp == 0 || stride < u32(240 * bpp)) return false;
+
+	const u8* src = gpu.getPointerPhys<u8>(addr, stride * columns);
+	if (src == nullptr) return false;
+
+	auto expand = [](u32 v, int bits) { return u32((v << (8 - bits)) | (v >> (2 * bits - 8))); };
+	cpuFramebufferPixels.resize(240 * columns);
+	for (int col = 0; col < columns; col++) {
+		const u8* column = src + (columns - 1 - col) * stride;
+		u32* dst = &cpuFramebufferPixels[col * 240];
+		for (int i = 0; i < 240; i++) {
+			const u8* p = column + i * bpp;
+			const u16 v = u16(p[0] | (p[1] << 8));
+			u32 r, g, b;
+			switch (format) {
+				case 0: r = p[3], g = p[2], b = p[1]; break;
+				case 1: r = p[2], g = p[1], b = p[0]; break;
+				case 2: r = expand(v >> 11, 5), g = expand((v >> 5) & 0x3F, 6), b = expand(v & 0x1F, 5); break;
+				case 3: r = expand(v >> 11, 5), g = expand((v >> 6) & 0x1F, 5), b = expand((v >> 1) & 0x1F, 5); break;
+				default: r = (v >> 12) * 17, g = ((v >> 8) & 0xF) * 17, b = ((v >> 4) & 0xF) * 17; break;
+			}
+			dst[i] = r | (g << 8) | (b << 16) | 0xFF000000;
+		}
+	}
+
+	GLuint& tex = cpuFramebufferTextures[screen];
+	if (tex == 0) {
+		glGenTextures(1, &tex);
+		glBindTexture(GL_TEXTURE_2D, tex);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	} else {
+		glBindTexture(GL_TEXTURE_2D, tex);
+	}
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 240, columns, 0, GL_RGBA, GL_UNSIGNED_BYTE, cpuFramebufferPixels.data());
+	return true;
 }
 
 void RendererGL::setupGLES() {
