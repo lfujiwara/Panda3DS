@@ -28,6 +28,11 @@ namespace {
 	double emuMs = 0;
 	u32 panics = 0;
 
+	// The 3DS refreshes at ~59.83 Hz; rAF can fire at 60, 120 or 144 Hz, so emulate by elapsed time instead of per callback
+	constexpr double emuFrameMs = 1000.0 / 59.8261;
+	double lastTickMs = 0;
+	double owedMs = 0;
+
 	void handleTouch(int mouseX, int mouseY) {
 		auto& hid = emu->getServiceManager().getHID();
 		const auto& c = screenCoordinates;
@@ -103,16 +108,25 @@ namespace {
 			}
 		}
 
-		hid.updateInputs(emu->getTicks());
-		const double start = emscripten_get_now();
-		try {
-			emu->runFrame();
-		} catch (const std::exception&) {
-			panics++;
+		const double now = emscripten_get_now();
+		owedMs += lastTickMs == 0 ? emuFrameMs : now - lastTickMs;
+		lastTickMs = now;
+		// After a hidden tab or a slow stretch, drop the backlog rather than fast-forwarding through it
+		owedMs = std::min(owedMs, 3 * emuFrameMs);
+
+		for (int i = 0; i < 2 && owedMs >= emuFrameMs; i++) {
+			owedMs -= emuFrameMs;
+			hid.updateInputs(emu->getTicks());
+			const double start = emscripten_get_now();
+			try {
+				emu->runFrame();
+			} catch (const std::exception&) {
+				panics++;
+			}
+			emuMs += emscripten_get_now() - start;
+			framesRun++;
+			SDL_GL_SwapWindow(window);
 		}
-		emuMs += emscripten_get_now() - start;
-		SDL_GL_SwapWindow(window);
-		framesRun++;
 	}
 }  // namespace
 

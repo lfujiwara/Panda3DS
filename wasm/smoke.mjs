@@ -1,11 +1,12 @@
 // Headless browser smoke test: load a ROM on the served page, run until N frames, screenshot the canvas.
 // Usage: node wasm/smoke.mjs <rom path relative to site, e.g. roms/ex_hello-world.3dsx> [frames=120] [out.png] [keys]
-// keys: optional "frame:key:down|up,..." script, e.g. "60:1:1,70:1:0" (HID key bitmask values)
+// keys: optional "frame:key:down|up,..." script. key is a HID bitmask ("60:1:1,70:1:0"), a keyboard key name
+// sent as a real DOM event ("60:l:1"), or "tap" with canvas coords as down value ("60:tap:200/360")
 import { chromium } from 'playwright';
 
 const [rom, framesArg = '120', out = 'smoke.png', keys = ''] = process.argv.slice(2);
 const frames = Number(framesArg);
-const keyScript = keys ? keys.split(',').map((k) => k.split(':').map(Number)) : [];
+const keyScript = keys ? keys.split(',').map((k) => { const [at, key, down] = k.split(':'); return [Number(at), key, down]; }) : [];
 
 // Reuse an already-downloaded headless shell if this playwright's pinned one is missing
 const fs = await import('node:fs');
@@ -66,7 +67,17 @@ let lastFrame = -1, stalled = 0;
 while (true) {
   const f = await page.evaluate(() => Module._panda_frames());
   for (const [at, key, down] of keyScript) {
-    if (at > lastFrame && at <= f) await page.evaluate(([k, d]) => Module._panda_set_key(k, d), [key, down]);
+    if (!(at > lastFrame && at <= f)) continue;
+    if (key === 'tap') {
+      const [x, y] = down.split('/').map(Number);
+      const box = await page.locator('#canvas').boundingBox();
+      await page.mouse.click(box.x + x, box.y + y, { delay: 100 });
+    } else if (isNaN(Number(key))) {
+      await page.locator('#canvas').focus();
+      await (down === '1' ? page.keyboard.down(key) : page.keyboard.up(key));
+    } else {
+      await page.evaluate(([k, d]) => Module._panda_set_key(k, d), [Number(key), Number(down)]);
+    }
   }
   if (f >= frames) break;
   stalled = f === lastFrame ? stalled + 1 : 0;
