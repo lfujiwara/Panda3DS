@@ -71,6 +71,18 @@ class SurfaceCache {
 		return std::nullopt;
 	}
 
+	// Drop every surface overlapping [start, end), e.g. after memory under them was rewritten without the GPU
+	void invalidateRange(u32 start, u32 end) {
+		for (auto& e : buffer) {
+			if (e.valid && e.range.lower() < end && e.range.upper() > start) {
+				unindexSurface(e);
+				e.free();
+				e.valid = false;
+				size--;
+			}
+		}
+	}
+
 	OptionalRef findFromAddress(u32 address) {
 		for (auto it = surfaceMap.begin(); it != surfaceMap.end(); ++it) {
 			SurfaceType* surface = it->second;

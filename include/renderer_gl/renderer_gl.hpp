@@ -92,6 +92,7 @@ class RendererGL final : public Renderer {
 	GLuint cpuFramebufferTextures[2] = {0, 0};
 	std::vector<u32> cpuFramebufferPixels;
 	bool uploadCPUFramebuffer(int screen, u32 addr, u32 config, u32 stride);
+	void softwareDisplayTransfer(u32 inputAddr, u32 outputAddr, u32 inputSize, u32 outputSize, u32 flags);
 	OpenGL::Texture blankTexture;
 	// The "default" vertex shader to use when using specialized shaders but not PICA vertex shader -> GLSL recompilation
 	// We can compile this once and then link it with all other generated fragment shaders

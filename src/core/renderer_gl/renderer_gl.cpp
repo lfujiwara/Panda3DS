@@ -767,6 +767,12 @@ void RendererGL::displayTransfer(u32 inputAddr, u32 outputAddr, u32 inputSize, u
 		inputWidth, outputWidth, inputHeight, outputHeight
 	);
 
+	// A source the GPU never rendered to was written by the CPU (software renderers, texture uploads): it only exists in memory
+	if (!colourBufferCache.findFromAddress(inputAddr)) {
+		softwareDisplayTransfer(inputAddr, outputAddr, inputSize, outputSize, flags);
+		return;
+	}
+
 	auto srcFramebuffer = getColourBuffer(inputAddr, inputFormat, inputWidth, outputHeight);
 	Math::Rect<u32> srcRect = srcFramebuffer->getSubRect(inputAddr, outputWidth, outputHeight);
 
@@ -1385,6 +1391,76 @@ bool RendererGL::uploadCPUFramebuffer(int screen, u32 addr, u32 config, u32 stri
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 240, columns, 0, GL_RGBA, GL_UNSIGNED_BYTE, cpuFramebufferPixels.data());
 	return true;
+}
+
+namespace {
+	// External framebuffer formats: 0 RGBA8, 1 RGB8, 2 RGB565, 3 RGB5A1, 4 RGBA4. Pixels travel as 0xRRGGBBAA.
+	constexpr u32 transferBytesPerPixel[8] = {4, 3, 2, 2, 2, 0, 0, 0};
+
+	u32 readTransferPixel(const u8* p, u32 format) {
+		auto e5 = [](u32 v) { return (v << 3) | (v >> 2); };
+		const u32 v = p[0] | (p[1] << 8);
+		switch (format) {
+			case 0: return (p[3] << 24) | (p[2] << 16) | (p[1] << 8) | p[0];
+			case 1: return (p[2] << 24) | (p[1] << 16) | (p[0] << 8) | 0xFF;
+			case 2: return (e5(v >> 11) << 24) | ((((v >> 5) & 0x3F) << 2 | ((v >> 9) & 3)) << 16) | (e5(v & 0x1F) << 8) | 0xFF;
+			case 3: return (e5(v >> 11) << 24) | (e5((v >> 6) & 0x1F) << 16) | (e5((v >> 1) & 0x1F) << 8) | ((v & 1) ? 0xFF : 0);
+			default: return ((v >> 12) * 17 << 24) | (((v >> 8) & 0xF) * 17 << 16) | (((v >> 4) & 0xF) * 17 << 8) | ((v & 0xF) * 17);
+		}
+	}
+
+	void writeTransferPixel(u8* p, u32 format, u32 c) {
+		const u32 r = c >> 24, g = (c >> 16) & 0xFF, b = (c >> 8) & 0xFF, a = c & 0xFF;
+		u16 v;
+		switch (format) {
+			case 0: p[0] = a, p[1] = b, p[2] = g, p[3] = r; return;
+			case 1: p[0] = b, p[1] = g, p[2] = r; return;
+			case 2: v = u16(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)); break;
+			case 3: v = u16(((r >> 3) << 11) | ((g >> 3) << 6) | ((b >> 3) << 1) | (a >> 7)); break;
+			default: v = u16(((r >> 4) << 12) | ((g >> 4) << 8) | ((b >> 4) << 4) | (a >> 4)); break;
+		}
+		p[0] = u8(v), p[1] = u8(v >> 8);
+	}
+
+	u32 mortonOffset(u32 x, u32 y, u32 bpp) { return (Texture::mortonInterleave(x, y) + (x & ~7u) * 8) * bpp; }
+}  // namespace
+
+// Memory-to-memory display transfer, following the hardware's tiling rules (same math as Citra's GPU::DisplayTransfer)
+// ponytail: scaling picks the top-left source pixel instead of averaging 2/4 of them
+void RendererGL::softwareDisplayTransfer(u32 inputAddr, u32 outputAddr, u32 inputSize, u32 outputSize, u32 flags) {
+	const u32 inputWidth = inputSize & 0xffff;
+	const u32 inFormat = Helpers::getBits<8, 3>(flags), outFormat = Helpers::getBits<12, 3>(flags);
+	const bool flip = flags & 1, inputLinear = flags & 2;
+	const u32 scaling = Helpers::getBits<24, 2>(flags);
+	const u32 hShift = scaling != 0 ? 1 : 0, vShift = scaling == 2 ? 1 : 0;
+	const u32 outputWidth = (outputSize & 0xffff) >> hShift, outputHeight = (outputSize >> 16) >> vShift;
+	const u32 inBpp = transferBytesPerPixel[inFormat], outBpp = transferBytesPerPixel[outFormat];
+	if (inBpp == 0 || outBpp == 0 || outputWidth == 0 || outputHeight == 0) return;
+
+	const u32 inBytes = inputWidth * (outputHeight << vShift) * inBpp, outBytes = outputWidth * outputHeight * outBpp;
+	const u8* src = gpu.getPointerPhys<u8>(inputAddr, inBytes);
+	u8* dst = gpu.getPointerPhys<u8>(outputAddr, outBytes);
+	if (src == nullptr || dst == nullptr) return;
+
+	for (u32 y = 0; y < outputHeight; y++) {
+		const u32 outY = flip ? outputHeight - 1 - y : y;
+		const u32 inY = y << vShift;
+		for (u32 x = 0; x < outputWidth; x++) {
+			const u32 inX = x << hShift;
+			u32 srcOffset, dstOffset;
+			if (inputLinear) {
+				srcOffset = (inX + inY * inputWidth) * inBpp;
+				dstOffset = mortonOffset(x, outY, outBpp) + (outY & ~7u) * outputWidth * outBpp;
+			} else {
+				srcOffset = mortonOffset(inX, inY, inBpp) + (inY & ~7u) * inputWidth * inBpp;
+				dstOffset = (x + outY * outputWidth) * outBpp;
+			}
+			writeTransferPixel(dst + dstOffset, outFormat, readTransferPixel(src + srcOffset, inFormat));
+		}
+	}
+
+	// GPU copies of the destination are now stale; texture hashing picks up the new memory contents for textures
+	colourBufferCache.invalidateRange(outputAddr, outputAddr + outBytes);
 }
 
 void RendererGL::setupGLES() {

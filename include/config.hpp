@@ -58,7 +58,8 @@ struct EmulatorConfig {
 	static constexpr RendererType rendererDefault = RendererType::OpenGL;
 #endif
 
-#if defined(__LIBRETRO__)
+// The web build relies on hashing to see textures the CPU rewrites (software-rendered homebrew, video)
+#if defined(__LIBRETRO__) || defined(__EMSCRIPTEN__)
 	static constexpr bool hashTexturesDefault = true;
 #else
 	static constexpr bool hashTexturesDefault = false;
