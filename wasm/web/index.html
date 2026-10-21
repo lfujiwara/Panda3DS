@@ -44,6 +44,14 @@
     printErr: log,
     // ?env=KEY=VAL,KEY2=VAL2 sets getenv() values for debugging toggles
     preRun: [() => {
+      // Panda keeps config, saves and the emulated SD card under SDL's pref path (/libsdl/Alber); persist it in IndexedDB
+      Module.FS.mkdir('/libsdl');
+      Module.FS.mount(Module.IDBFS, {}, '/libsdl');
+      Module.addRunDependency('idbfs');
+      Module.FS.syncfs(true, (err) => {
+        if (err) log('[web] IDBFS load failed: ' + err);
+        Module.removeRunDependency('idbfs');
+      });
       for (const kv of (new URLSearchParams(location.search).get('env') || '').split(',').filter(Boolean)) {
         const [k, v = '1'] = kv.split('=');
         Module.ENV[k] = v;
@@ -59,6 +67,31 @@
       window.pandaReady = true;
     },
   };
+
+  let syncing = false;
+  window.pandaSync = () => new Promise((resolve) => {
+    if (syncing || !Module.FS) return resolve(false);
+    syncing = true;
+    Module.FS.syncfs(false, (err) => { syncing = false; if (err) log('[web] IDBFS save failed: ' + err); resolve(!err); });
+  });
+  setInterval(window.pandaSync, 5000);
+  addEventListener('pagehide', window.pandaSync);
+  document.addEventListener('visibilitychange', () => document.hidden && window.pandaSync());
+
+  // Browsers only start audio after a user gesture
+  const resumeAudio = () => {
+    for (const ctx of window.pandaAudioContexts || []) if (ctx.state !== 'running') ctx.resume();
+  };
+  addEventListener('pointerdown', resumeAudio);
+  addEventListener('keydown', resumeAudio);
+  for (const C of [window.AudioContext, window.webkitAudioContext].filter(Boolean)) {
+    const orig = C.prototype.createScriptProcessor;
+    if (!orig) continue;
+    C.prototype.createScriptProcessor = function (...args) {
+      (window.pandaAudioContexts ||= new Set()).add(this);
+      return orig.apply(this, args);
+    };
+  }
 
   document.getElementById('file').addEventListener('change', async (e) => {
     const f = e.target.files[0];

@@ -6,9 +6,12 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 
+#include "audio/dsp_binary.hpp"
 #include "emulator.hpp"
+#include "io_file.hpp"
 #include "input_mappings.hpp"
 #include "screen_layout.hpp"
 
@@ -49,6 +52,23 @@ namespace {
 			case HID::Keys::CirclePadDown: hid.setCirclepadY(pressed ? -0x9C : 0); break;
 			default: pressed ? hid.pressKey(key) : hid.releaseKey(key); break;
 		}
+	}
+
+	// libctru's ndspInit refuses to start without sdmc:/3ds/dspfirm.cdc, a firmware dump users take from their console.
+	// Panda's HLE DSP only parses the DSP1 header, so an empty header with no segments is enough to get audio going.
+	void ensureDspFirmwareStub() {
+		const auto path = IOFile::getAppData() / "SDMC" / "3ds" / "dspfirm.cdc";
+		if (std::filesystem::exists(path)) return;
+		std::filesystem::create_directories(path.parent_path());
+
+		Dsp1 header{};
+		std::memcpy(header.magic, "DSP1", 4);
+		header.size = sizeof(header);
+		FILE* f = std::fopen(path.string().c_str(), "wb");
+		if (!f) return;
+		std::fwrite(&header, sizeof(header), 1, f);
+		std::fclose(f);
+		std::printf("[web] wrote stub %s\n", path.string().c_str());
 	}
 
 	void frame() {
@@ -95,6 +115,8 @@ extern "C" {
 			return 0;
 		}
 		std::printf("[web] loaded %s\n", path);
+		// The SD card dir is per ROM and only known once loadROM has set it; the game reads the file at ndspInit, after this
+		ensureDspFirmwareStub();
 		return 1;
 	}
 

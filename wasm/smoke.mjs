@@ -13,8 +13,31 @@ const os = await import('node:os');
 const cache = `${os.homedir()}/Library/Caches/ms-playwright`;
 const shells = fs.existsSync(cache) ? fs.readdirSync(cache).filter((d) => d.startsWith('chromium_headless_shell-')).sort().reverse() : [];
 const executablePath = process.env.CHROME_PATH ?? shells.map((d) => `${cache}/${d}/chrome-mac/headless_shell`).concat(shells.map((d) => `${cache}/${d}/chrome-headless-shell-mac-arm64/chrome-headless-shell`)).find((p) => fs.existsSync(p));
-const browser = await chromium.launch({ headless: true, executablePath, args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
-const page = await browser.newPage({ viewport: { width: 700, height: 760 } });
+const launchOptions = { headless: true, executablePath, args: ['--autoplay-policy=no-user-gesture-required', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] };
+// SMOKE_PROFILE=<dir> keeps IndexedDB between runs, to test save persistence
+const browser = process.env.SMOKE_PROFILE
+  ? await chromium.launchPersistentContext(process.env.SMOKE_PROFILE, { ...launchOptions, viewport: { width: 700, height: 760 } })
+  : await chromium.launch(launchOptions);
+const page = process.env.SMOKE_PROFILE ? await browser.newPage() : await browser.newPage({ viewport: { width: 700, height: 760 } });
+// Record peak output level of every ScriptProcessorNode so tests can tell audio is actually produced
+await page.addInitScript(() => {
+  window.pandaAudioPeak = 0;
+  window.pandaAudioCalls = 0;
+  const desc = Object.getOwnPropertyDescriptor(ScriptProcessorNode.prototype, 'onaudioprocess');
+  Object.defineProperty(ScriptProcessorNode.prototype, 'onaudioprocess', {
+    set(fn) {
+      desc.set.call(this, (e) => {
+        fn(e);
+        window.pandaAudioCalls++;
+        for (let c = 0; c < e.outputBuffer.numberOfChannels; c++) {
+          const d = e.outputBuffer.getChannelData(c);
+          for (let i = 0; i < d.length; i++) window.pandaAudioPeak = Math.max(window.pandaAudioPeak, Math.abs(d[i]));
+        }
+      });
+    },
+    get() { return desc.get.call(this); },
+  });
+});
 const logs = [];
 page.on('console', (m) => logs.push(m.text()));
 page.on('pageerror', (e) => logs.push('PAGEERROR ' + e.message));
@@ -44,7 +67,8 @@ while (true) {
   await page.waitForTimeout(100);
 }
 const secs = (Date.now() - t0) / 1000;
-const info = await page.evaluate(() => ({ frames: Module._panda_frames(), pc: Module._panda_pc().toString(16) }));
+await page.evaluate(() => window.pandaSync());
+const info = await page.evaluate(() => ({ frames: Module._panda_frames(), pc: Module._panda_pc().toString(16), audioPeak: window.pandaAudioPeak.toFixed(3), audioCalls: window.pandaAudioCalls, audioState: [...(window.pandaAudioContexts || [])].map((c) => c.state).join('/') }));
 await page.locator('#canvas').screenshot({ path: out });
 const colors = await page.evaluate(async () => {
   const c = document.getElementById('canvas');
@@ -61,5 +85,5 @@ const colors = await page.evaluate(async () => {
 });
 fs.writeFileSync(out.replace(/\.png$/, '') + '.log', logs.join('\n'));
 console.log(logs.filter((l) => !l.includes('GPU stall')).slice(-25).join('\n'));
-console.log(`[smoke] ${rom}: frames=${info.frames} pc=${info.pc} wall=${secs.toFixed(1)}s fps=${(info.frames / secs).toFixed(1)} canvasColors=${colors} -> ${out}`);
+console.log(`[smoke] ${rom}: frames=${info.frames} pc=${info.pc} wall=${secs.toFixed(1)}s fps=${(info.frames / secs).toFixed(1)} canvasColors=${colors} audio=${info.audioPeak}/${info.audioCalls}cb/${info.audioState} -> ${out}`);
 await browser.close();
