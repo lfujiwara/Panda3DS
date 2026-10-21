@@ -118,6 +118,7 @@ class Emulator {
 	CPU& getCPU() { return cpu; }
 	Memory& getMemory() { return memory; }
 	Kernel& getKernel() { return kernel; }
+	GPU& getGPU() { return gpu; }
 	Scheduler& getScheduler() { return scheduler; }
 	Audio::DSPCore* getDSP() { return dsp.get(); }
 

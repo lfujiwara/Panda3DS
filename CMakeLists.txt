@@ -66,6 +66,7 @@ option(ENABLE_RENDERDOC_API "Build with support for Renderdoc's capture API for 
 option(DISABLE_SSE4 "Build with SSE4 instructions disabled, may reduce performance" OFF)
 option(ENABLE_FASTMEM "Build with support for hardware fastmem" ON)
 option(USE_LIBRETRO_AUDIO "Enable to use the LR audio device with the LR core. Otherwise our own device is used" OFF)
+option(ENABLE_CPU_INTERP "Use the dyncom ARM11 interpreter instead of Dynarmic" OFF)
 option(IOS_SIMULATOR_BUILD "Compiling for IOS simulator (Set to off if compiling for a real iPhone)" ON)
 
 # Building with newer Vulkan SDK versions requires MacOS 13.3, as it uses std::format which isn't available in older libcxx
@@ -301,6 +302,12 @@ else()
   endif()
 endif()
 
+if(EMSCRIPTEN)
+    set(ENABLE_CPU_INTERP ON)
+    set(HOST_X64 FALSE)
+    set(HOST_ARM64 FALSE)
+endif()
+
 if (HOST_X64)
     add_subdirectory(third_party/xbyak) # Add xbyak submodule for x86 JITs
     include_directories(third_party/xbyak)
@@ -332,7 +339,11 @@ if(ENABLE_RENDERDOC_API)
     add_compile_definitions(PANDA3DS_ENABLE_RENDERDOC)
 endif()
 
-if(HOST_X64 OR HOST_ARM64)
+if(ENABLE_CPU_INTERP)
+    add_compile_definitions(CPU_INTERP)
+    file(GLOB_RECURSE DYNCOM_SOURCE_FILES third_party/dyncom/core/*.cpp)
+    list(FILTER DYNCOM_SOURCE_FILES EXCLUDE REGEX "vfp/vfpinstr\\.cpp$")
+elseif(HOST_X64 OR HOST_ARM64)
     set(DYNARMIC_TESTS OFF)
     set(DYNARMIC_FRONTENDS "A32" CACHE STRING "")
     add_subdirectory(third_party/dynarmic)
@@ -351,7 +362,7 @@ add_subdirectory(third_party/capstone)
 include_directories(third_party/capstone/include)
 
 set(SOURCE_FILES src/emulator.cpp src/io_file.cpp src/config.cpp
-                 src/core/CPU/cpu_dynarmic.cpp src/core/CPU/dynarmic_cycles.cpp
+                 src/core/CPU/cpu_dynarmic.cpp src/core/CPU/dynarmic_cycles.cpp src/core/CPU/cpu_interp.cpp
                  src/core/memory.cpp src/renderer.cpp src/core/renderer_null/renderer_null.cpp
                  src/http_server.cpp src/stb_image_write.c src/core/cheats.cpp src/core/action_replay.cpp
                  src/discord_rpc.cpp src/lua.cpp src/memory_mapped_file.cpp src/renderdoc.cpp
@@ -719,7 +730,13 @@ set(ALL_SOURCES ${SOURCE_FILES} ${FS_SOURCE_FILES} ${CRYPTO_SOURCE_FILES} ${KERN
     ${AUDIO_SOURCE_FILES} ${HEADER_FILES} ${FRONTEND_HEADER_FILES})
 target_sources(AlberCore PRIVATE ${ALL_SOURCES})
 
-target_link_libraries(AlberCore PRIVATE dynarmic glad resources_console_fonts fdk-aac)
+if(ENABLE_CPU_INTERP)
+    target_sources(AlberCore PRIVATE ${DYNCOM_SOURCE_FILES})
+    target_include_directories(AlberCore PRIVATE third_party/dyncom)
+else()
+    target_link_libraries(AlberCore PRIVATE dynarmic)
+endif()
+target_link_libraries(AlberCore PRIVATE glad resources_console_fonts fdk-aac)
 target_link_libraries(AlberCore PUBLIC glad capstone fmt::fmt teakra)
 
 if(ENABLE_DISCORD_RPC AND NOT ANDROID)
@@ -883,6 +900,11 @@ elseif(BUILD_LIBRETRO_CORE)
     add_library(panda3ds_libretro SHARED src/libretro_core.cpp)
     target_link_libraries(panda3ds_libretro PUBLIC AlberCore)
     set_target_properties(panda3ds_libretro PROPERTIES PREFIX "")
+endif()
+
+if(NOT BUILD_HYDRA_CORE AND NOT BUILD_LIBRETRO_CORE AND NOT ANDROID)
+    add_executable(AlberHeadless src/panda_headless/main.cpp)
+    target_link_libraries(AlberHeadless PRIVATE AlberCore)
 endif()
 
 if(ENABLE_LTO OR ENABLE_USER_BUILD)
