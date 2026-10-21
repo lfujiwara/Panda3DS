@@ -31,10 +31,38 @@
   const statusEl = document.getElementById('status');
   const log = (s) => { logEl.textContent += s + '\n'; logEl.scrollTop = logEl.scrollHeight; console.log(s); };
 
-  async function bootRom(name, bytes) {
+  // Dumps can be several GB: Chrome can't read that into one ArrayBuffer, so keep the ROM as 256 MB chunks and serve
+  // reads from them through a MEMFS node with its own read op. Costs JS memory equal to the file, nothing in the wasm heap.
+  async function writeChunkedFile(path, blob) {
+    const CHUNK = 256 << 20;
+    const chunks = [];
+    for (let at = 0; at < blob.size; at += CHUNK) chunks.push(new Uint8Array(await blob.slice(at, at + CHUNK).arrayBuffer()));
+    const FS = Module.FS;
+    try { FS.unlink(path); } catch {}
+    const slash = path.lastIndexOf('/');
+    const node = FS.createFile(path.slice(0, slash) || '/', path.slice(slash + 1), {}, true, false);
+    node.contents = { length: blob.size };
+    Object.defineProperty(node, 'usedBytes', { get: () => blob.size });
+    node.stream_ops = {
+      ...node.stream_ops,
+      read(stream, buffer, offset, length, position) {
+        const end = Math.min(blob.size, position + length);
+        let done = 0;
+        while (position + done < end) {
+          const at = position + done, chunk = chunks[Math.floor(at / CHUNK)], inChunk = at % CHUNK;
+          const n = Math.min(end - at, chunk.length - inChunk);
+          new Uint8Array(buffer.buffer, buffer.byteOffset + offset + done, n).set(chunk.subarray(inChunk, inChunk + n));
+          done += n;
+        }
+        return done;
+      },
+    };
+  }
+
+  async function bootRom(name, blob) {
     const path = '/roms/' + name;
     try { Module.FS.mkdir('/roms'); } catch {}
-    Module.FS.writeFile(path, bytes);
+    await writeChunkedFile(path, blob);
     const ok = Module.ccall('panda_load_rom', 'number', ['string'], [path]);
     statusEl.textContent = ok ? 'running ' + name : 'failed to load ' + name;
     document.getElementById('canvas').focus();
@@ -75,7 +103,7 @@
           log('[web] sd: ' + dest);
         }
         const res = await fetch(rom);
-        await bootRom(rom.split('/').pop(), new Uint8Array(await res.arrayBuffer()));
+        await bootRom(rom.split('/').pop(), await res.blob());
       }
       window.pandaReady = true;
     },
@@ -108,7 +136,14 @@
 
   document.getElementById('file').addEventListener('change', async (e) => {
     const f = e.target.files[0];
-    if (f) await bootRom(f.name, new Uint8Array(await f.arrayBuffer()));
+    if (!f) return;
+    statusEl.textContent = 'reading ' + f.name + '…';
+    try {
+      await bootRom(f.name, f);
+    } catch (err) {
+      statusEl.textContent = 'failed to load ' + f.name + ': ' + err;
+      log('[web] ' + statusEl.textContent);
+    }
   });
 </script>
 <script src="AlberWeb.js"></script>

@@ -145,6 +145,15 @@ extern "C" {
 	EMSCRIPTEN_KEEPALIVE double panda_frames() { return double(framesRun); }
 	// Wall time spent inside Emulator::runFrame (CPU + GPU command processing), excluding the browser's frame pacing
 	EMSCRIPTEN_KEEPALIVE double panda_emu_ms() { return emuMs; }
+	// Read 4 bytes at a byte offset through the same IOFile path the loaders use; tests large-file seeks
+	EMSCRIPTEN_KEEPALIVE u32 panda_read_u32(const char* path, double offset) {
+		IOFile file(std::filesystem::path(path), "rb");
+		u32 value = 0;
+		if (!file.isOpen() || !file.seek(s64(offset))) return 0xFFFFFFFF;
+		file.readBytes(&value, sizeof(value));
+		return value;
+	}
+
 	EMSCRIPTEN_KEEPALIVE u32 panda_panics() { return panics; }
 	EMSCRIPTEN_KEEPALIVE u32 panda_pc() { return emu->getCPU().getReg(15); }
 

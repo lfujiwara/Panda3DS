@@ -44,7 +44,9 @@ page.on('console', (m) => logs.push(m.text()));
 page.on('pageerror', (e) => logs.push('PAGEERROR ' + e.message));
 
 const t0 = Date.now();
-await page.goto(`http://127.0.0.1:8301/index.html?rom=${encodeURIComponent(rom)}&env=${encodeURIComponent(process.env.PANDA_ENV ?? '')}&sd=${encodeURIComponent(process.env.SMOKE_SD ?? '')}`);
+// SMOKE_FILE=1: treat <rom> as a local path and load it through the page's file picker, like a user would
+const viaPicker = !!process.env.SMOKE_FILE;
+await page.goto(`http://127.0.0.1:8301/index.html?rom=${viaPicker ? '' : encodeURIComponent(rom)}&env=${encodeURIComponent(process.env.PANDA_ENV ?? '')}&sd=${encodeURIComponent(process.env.SMOKE_SD ?? '')}`);
 try {
   await page.waitForFunction(() => window.pandaReady === true, null, { timeout: 60000 });
 } catch (e) {
@@ -61,6 +63,12 @@ if (cdp) {
   await cdp.send('Profiler.enable');
   await cdp.send('Profiler.setSamplingInterval', { interval: 200 });
   await cdp.send('Profiler.start');
+}
+
+if (viaPicker) {
+  await page.locator('#file').setInputFiles(rom);
+  await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('running') || document.getElementById('status').textContent.startsWith('failed'), null, { timeout: 300000 });
+  logs.push('[smoke] picker load took ' + ((Date.now() - t0) / 1000).toFixed(1) + 's: ' + (await page.locator('#status').textContent()));
 }
 
 let lastFrame = -1, stalled = 0;
