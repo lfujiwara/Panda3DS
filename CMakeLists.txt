@@ -902,6 +902,14 @@ elseif(BUILD_LIBRETRO_CORE)
     set_target_properties(panda3ds_libretro PROPERTIES PREFIX "")
 endif()
 
+if(EMSCRIPTEN)
+    add_executable(AlberWeb src/panda_web/main.cpp src/panda_sdl/mappings.cpp)
+    target_link_libraries(AlberWeb PRIVATE AlberCore)
+    target_link_options(AlberWeb PRIVATE -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sFULL_ES3=1 -sGL_ENABLE_GET_PROC_ADDRESS=1
+        -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=512MB -sSTACK_SIZE=8MB -sASSERTIONS=1 --profiling-funcs
+        -sEXPORTED_RUNTIME_METHODS=FS,ccall,cwrap -sFORCE_FILESYSTEM=1)
+endif()
+
 if(NOT BUILD_HYDRA_CORE AND NOT BUILD_LIBRETRO_CORE AND NOT ANDROID)
     add_executable(AlberHeadless src/panda_headless/main.cpp)
     target_link_libraries(AlberHeadless PRIVATE AlberCore)

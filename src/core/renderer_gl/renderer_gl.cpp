@@ -59,14 +59,17 @@ void RendererGL::reset() {
 void RendererGL::initGraphicsContextInternal() {
 	gl.reset();
 
-	auto gl_resources = cmrc::RendererGL::get_filesystem();
-	auto vertexShaderSource = gl_resources.open("opengl_vertex_shader.vert");
-	auto fragmentShaderSource = gl_resources.open("opengl_fragment_shader.frag");
+	// The ubershader is desktop GLSL only, and setupGLES() turns ubershaders off anyway
+	if (!driverInfo.usingGLES) {
+		auto gl_resources = cmrc::RendererGL::get_filesystem();
+		auto vertexShaderSource = gl_resources.open("opengl_vertex_shader.vert");
+		auto fragmentShaderSource = gl_resources.open("opengl_fragment_shader.frag");
 
-	OpenGL::Shader vert({vertexShaderSource.begin(), vertexShaderSource.size()}, OpenGL::Vertex);
-	OpenGL::Shader frag({fragmentShaderSource.begin(), fragmentShaderSource.size()}, OpenGL::Fragment);
-	triangleProgram.create({vert, frag});
-	initUbershader(triangleProgram);
+		OpenGL::Shader vert({vertexShaderSource.begin(), vertexShaderSource.size()}, OpenGL::Vertex);
+		OpenGL::Shader frag({fragmentShaderSource.begin(), fragmentShaderSource.size()}, OpenGL::Fragment);
+		triangleProgram.create({vert, frag});
+		initUbershader(triangleProgram);
+	}
 
 	compileDisplayShader();
 	// Create stream buffers for vertex, index and uniform buffers

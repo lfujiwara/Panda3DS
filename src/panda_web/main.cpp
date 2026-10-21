@@ -1,0 +1,137 @@
+// Browser frontend: SDL2 window on a WebGL2 canvas, one emulated frame per requestAnimationFrame.
+// JS writes a ROM into the virtual FS and calls panda_load_rom(path); see wasm/web/index.html.
+#include <SDL.h>
+#include <glad/gl.h>
+#include <emscripten.h>
+
+#include <algorithm>
+#include <cstdio>
+#include <filesystem>
+
+#include "emulator.hpp"
+#include "input_mappings.hpp"
+#include "screen_layout.hpp"
+
+namespace {
+	constexpr int windowWidth = 400;
+	constexpr int windowHeight = 480;
+
+	Emulator* emu;
+	SDL_Window* window;
+	InputMappings keyboardMappings;
+	ScreenLayout::WindowCoordinates screenCoordinates;
+	bool touching = false;
+	u64 framesRun = 0;
+
+	void handleTouch(int mouseX, int mouseY) {
+		auto& hid = emu->getServiceManager().getHID();
+		const auto& c = screenCoordinates;
+		const int bx = int(c.bottomScreenX), by = int(c.bottomScreenY), bw = int(c.bottomScreenWidth), bh = int(c.bottomScreenHeight);
+
+		if (mouseX >= bx && mouseX < bx + bw && mouseY >= by && mouseY < by + bh) {
+			const float relX = float(mouseX - bx) / float(bw);
+			const float relY = float(mouseY - by) / float(bh);
+			hid.setTouchScreenPress(
+				u16(std::clamp(relX * ScreenLayout::BOTTOM_SCREEN_WIDTH, 0.f, float(ScreenLayout::BOTTOM_SCREEN_WIDTH - 1))),
+				u16(std::clamp(relY * ScreenLayout::BOTTOM_SCREEN_HEIGHT, 0.f, float(ScreenLayout::BOTTOM_SCREEN_HEIGHT - 1)))
+			);
+		} else {
+			hid.releaseTouchScreen();
+		}
+	}
+
+	void setKey(u32 key, bool pressed) {
+		auto& hid = emu->getServiceManager().getHID();
+		switch (key) {
+			case HID::Keys::CirclePadRight: hid.setCirclepadX(pressed ? 0x9C : 0); break;
+			case HID::Keys::CirclePadLeft: hid.setCirclepadX(pressed ? -0x9C : 0); break;
+			case HID::Keys::CirclePadUp: hid.setCirclepadY(pressed ? 0x9C : 0); break;
+			case HID::Keys::CirclePadDown: hid.setCirclepadY(pressed ? -0x9C : 0); break;
+			default: pressed ? hid.pressKey(key) : hid.releaseKey(key); break;
+		}
+	}
+
+	void frame() {
+		auto& hid = emu->getServiceManager().getHID();
+		SDL_Event event;
+		while (SDL_PollEvent(&event)) {
+			switch (event.type) {
+				case SDL_KEYDOWN:
+				case SDL_KEYUP: {
+					if (event.key.repeat) break;
+					const u32 key = keyboardMappings.getMapping(event.key.keysym.sym);
+					if (key != HID::Keys::Null) setKey(key, event.type == SDL_KEYDOWN);
+					break;
+				}
+				case SDL_MOUSEBUTTONDOWN:
+					if (event.button.button == SDL_BUTTON_LEFT) {
+						touching = true;
+						handleTouch(event.button.x, event.button.y);
+					}
+					break;
+				case SDL_MOUSEMOTION:
+					if (touching) handleTouch(event.motion.x, event.motion.y);
+					break;
+				case SDL_MOUSEBUTTONUP:
+					if (event.button.button == SDL_BUTTON_LEFT) {
+						touching = false;
+						hid.releaseTouchScreen();
+					}
+					break;
+			}
+		}
+
+		hid.updateInputs(emu->getTicks());
+		emu->runFrame();
+		SDL_GL_SwapWindow(window);
+		framesRun++;
+	}
+}  // namespace
+
+extern "C" {
+	EMSCRIPTEN_KEEPALIVE int panda_load_rom(const char* path) {
+		if (!emu->loadROM(std::filesystem::path(path))) {
+			std::fprintf(stderr, "[web] failed to load %s\n", path);
+			return 0;
+		}
+		std::printf("[web] loaded %s\n", path);
+		return 1;
+	}
+
+	EMSCRIPTEN_KEEPALIVE double panda_frames() { return double(framesRun); }
+	EMSCRIPTEN_KEEPALIVE u32 panda_pc() { return emu->getCPU().getReg(15); }
+
+	// Simulate a key press from JS (tests drive input without focusing a window)
+	EMSCRIPTEN_KEEPALIVE void panda_set_key(u32 key, int pressed) { setKey(key, pressed != 0); }
+}
+
+int main(int argc, char* argv[]) {
+	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) < 0) {
+		Helpers::panic("SDL init failed: %s", SDL_GetError());
+	}
+
+	emu = new Emulator();
+	keyboardMappings = InputMappings::defaultKeyboardMappings();
+
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+	window = SDL_CreateWindow("Panda3DS", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, windowWidth, windowHeight, SDL_WINDOW_OPENGL);
+	if (!window) Helpers::panic("Window creation failed: %s", SDL_GetError());
+
+	SDL_GLContext glContext = SDL_GL_CreateContext(window);
+	if (!glContext) Helpers::panic("WebGL2 context creation failed: %s", SDL_GetError());
+	if (!gladLoadGLES2Loader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress))) Helpers::panic("glad GLES2 loader failed");
+
+	emu->setOutputSize(windowWidth, windowHeight);
+	ScreenLayout::calculateCoordinates(
+		screenCoordinates, u32(windowWidth), u32(windowHeight), emu->getConfig().topScreenSize, emu->getConfig().screenLayout
+	);
+	emu->getRenderer()->setupGLES();
+	emu->initGraphicsContext(window);
+
+	std::printf("[web] ready, renderer=%s\n", Renderer::typeToString(emu->getRendererType()));
+	EM_ASM(if (Module.onPandaReady) Module.onPandaReady(););
+	emscripten_set_main_loop(frame, 0, false);
+	return 0;
+}
