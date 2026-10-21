@@ -76,7 +76,10 @@ void Kernel::serviceSVC(u32 svc) {
 		// Luma SVCs
 		case 0x93: svcInvalidateInstructionCacheRange(); break;
 		case 0x94: svcInvalidateEntireInstructionCache(); break;
-		default: Helpers::panic("Unimplemented svc: %X @ %08X", svc, regs[15]); break;
+		default:
+			Helpers::warn("Unimplemented svc: %X @ %08X", svc, regs[15]);
+			regs[0] = 0xF8C007F4;
+			break;
 	}
 
 	evalReschedule();
@@ -410,7 +413,10 @@ void Kernel::getSystemInfo() {
 			break;
 		}
 
-		default: Helpers::panic("GetSystemInfo: Unknown system info type: %x (subtype: %x)\n", infoType, subtype); break;
+		default:
+			Helpers::warn("GetSystemInfo: Unknown system info type: %x (subtype: %x)\n", infoType, subtype);
+			regs[0] = 0xF8C007F4;  // Kernel, InvalidEnumValue
+			break;
 	}
 }
 

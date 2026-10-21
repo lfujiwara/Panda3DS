@@ -51,7 +51,7 @@ void Kernel::connectToPort() {
 	// Try getting a handle to the port
 	std::optional<Handle> optionalHandle = getPortHandle(port.c_str());
 	if (!optionalHandle.has_value()) [[unlikely]] {
-		Helpers::panic("ConnectToPort: Port doesn't exist\n");
+		Helpers::warn("ConnectToPort: Port %s doesn't exist\n", port.c_str());
 		regs[0] = Result::Kernel::NotFound;
 		return;
 	}

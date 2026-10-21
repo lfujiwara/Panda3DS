@@ -54,6 +54,14 @@ try {
   process.exit(1);
 }
 
+// SMOKE_PROFILE_CPU=1: sample the page with the V8 profiler and print the top self-time functions
+const cdp = process.env.SMOKE_PROFILE_CPU ? await page.context().newCDPSession(page) : null;
+if (cdp) {
+  await cdp.send('Profiler.enable');
+  await cdp.send('Profiler.setSamplingInterval', { interval: 200 });
+  await cdp.send('Profiler.start');
+}
+
 let lastFrame = -1, stalled = 0;
 while (true) {
   const f = await page.evaluate(() => Module._panda_frames());
@@ -67,8 +75,22 @@ while (true) {
   await page.waitForTimeout(100);
 }
 const secs = (Date.now() - t0) / 1000;
+if (cdp) {
+  const { profile } = await cdp.send('Profiler.stop');
+  const self = new Map();
+  const byId = new Map(profile.nodes.map((n) => [n.id, n]));
+  const dt = profile.timeDeltas;
+  profile.samples.forEach((id, i) => {
+    const n = byId.get(id);
+    const name = n.callFrame.functionName || '(anon)';
+    self.set(name, (self.get(name) || 0) + (dt[i] || 0));
+  });
+  const total = [...self.values()].reduce((a, b) => a + b, 0);
+  const top = [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30);
+  fs.writeFileSync(out.replace(/\.png$/, '') + '.profile.txt', top.map(([n, t]) => `${((100 * t) / total).toFixed(1).padStart(5)}%  ${n}`).join('\n'));
+}
 await page.evaluate(() => window.pandaSync());
-const info = await page.evaluate(() => ({ frames: Module._panda_frames(), pc: Module._panda_pc().toString(16), audioPeak: window.pandaAudioPeak.toFixed(3), audioCalls: window.pandaAudioCalls, audioState: [...(window.pandaAudioContexts || [])].map((c) => c.state).join('/') }));
+const info = await page.evaluate(() => ({ panics: Module._panda_panics(), emuMs: Module._panda_emu_ms(), frames: Module._panda_frames(), pc: Module._panda_pc().toString(16), audioPeak: window.pandaAudioPeak.toFixed(3), audioCalls: window.pandaAudioCalls, audioState: [...(window.pandaAudioContexts || [])].map((c) => c.state).join('/') }));
 await page.locator('#canvas').screenshot({ path: out });
 const colors = await page.evaluate(async () => {
   const c = document.getElementById('canvas');
@@ -85,5 +107,5 @@ const colors = await page.evaluate(async () => {
 });
 fs.writeFileSync(out.replace(/\.png$/, '') + '.log', logs.join('\n'));
 console.log(logs.filter((l) => !l.includes('GPU stall')).slice(-25).join('\n'));
-console.log(`[smoke] ${rom}: frames=${info.frames} pc=${info.pc} wall=${secs.toFixed(1)}s fps=${(info.frames / secs).toFixed(1)} canvasColors=${colors} audio=${info.audioPeak}/${info.audioCalls}cb/${info.audioState} -> ${out}`);
+console.log(`[smoke] ${rom}: frames=${info.frames} panics=${info.panics} pc=${info.pc} wall=${secs.toFixed(1)}s fps=${(info.frames / secs).toFixed(1)} emuFps=${(info.frames / (info.emuMs / 1000)).toFixed(1)} canvasColors=${colors} audio=${info.audioPeak}/${info.audioCalls}cb/${info.audioState} -> ${out}`);
 await browser.close();

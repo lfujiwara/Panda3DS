@@ -1,4 +1,5 @@
 #pragma once
+#include <stdexcept>
 #include <climits>
 #include <cstdarg>
 #include <cstdint>
@@ -46,7 +47,12 @@ namespace Helpers {
 		std::printf(fmt, args...);
 		std::cout << termcolor::reset << "\n";
 
+#ifdef __EMSCRIPTEN__
+		// The browser frontend catches this per frame and keeps going, so one bad SVC doesn't kill the page
+		throw std::runtime_error("panic");
+#else
 		exit(1);
+#endif
 	}
 
 #ifdef PANDA3DS_LIMITED_PANICS

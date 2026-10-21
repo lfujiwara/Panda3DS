@@ -905,8 +905,12 @@ endif()
 if(EMSCRIPTEN)
     add_executable(AlberWeb src/panda_web/main.cpp src/panda_sdl/mappings.cpp)
     target_link_libraries(AlberWeb PRIVATE AlberCore)
+    option(PANDA_WEB_DEBUG "Link the web build with Emscripten assertions and function names" OFF)
+    if(PANDA_WEB_DEBUG)
+        target_link_options(AlberWeb PRIVATE -sASSERTIONS=1 --profiling-funcs)
+    endif()
     target_link_options(AlberWeb PRIVATE -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sFULL_ES3=1 -sGL_ENABLE_GET_PROC_ADDRESS=1
-        -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=512MB -sSTACK_SIZE=8MB -sASSERTIONS=1 --profiling-funcs
+        -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=512MB -sSTACK_SIZE=8MB
         -sEXPORTED_RUNTIME_METHODS=FS,ccall,cwrap,ENV,IDBFS,addRunDependency,removeRunDependency,HEAPU8,HEAPU16,HEAPU32,HEAPF32,HEAP32 -sFORCE_FILESYSTEM=1 -lidbfs.js)
 endif()
 

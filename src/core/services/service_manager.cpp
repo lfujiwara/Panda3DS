@@ -162,10 +162,15 @@ void ServiceManager::getServiceHandle(u32 messagePointer) {
 	log("srv::getServiceHandle (Service: %s, nameLength: %d, flags: %d)\n", service.c_str(), nameLength, flags);
 
 	// Look up service handle in map, panic if it does not exist
-	if (auto search = serviceMapByName.find(service); search != serviceMapByName.end())
+	if (auto search = serviceMapByName.find(service); search != serviceMapByName.end()) {
 		handle = search->second;
-	else
-		Helpers::panic("srv: GetServiceHandle with unknown service %s", service.c_str());
+	} else {
+		// Real srv fails the request for services that aren't registered; homebrew probes optional ones (am:net, pxi:dev...)
+		Helpers::warn("srv: GetServiceHandle with unknown service %s", service.c_str());
+		mem.write32(messagePointer, IPC::responseHeader(0x5, 1, 0));
+		mem.write32(messagePointer + 4, 0xD0406401);  // SRV, ServiceNotRegistered
+		return;
+	}
 
 	mem.write32(messagePointer, IPC::responseHeader(0x5, 1, 2));
 	mem.write32(messagePointer + 4, Result::Success);

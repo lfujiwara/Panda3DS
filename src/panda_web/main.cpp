@@ -25,6 +25,8 @@ namespace {
 	ScreenLayout::WindowCoordinates screenCoordinates;
 	bool touching = false;
 	u64 framesRun = 0;
+	double emuMs = 0;
+	u32 panics = 0;
 
 	void handleTouch(int mouseX, int mouseY) {
 		auto& hid = emu->getServiceManager().getHID();
@@ -102,7 +104,13 @@ namespace {
 		}
 
 		hid.updateInputs(emu->getTicks());
-		emu->runFrame();
+		const double start = emscripten_get_now();
+		try {
+			emu->runFrame();
+		} catch (const std::exception&) {
+			panics++;
+		}
+		emuMs += emscripten_get_now() - start;
 		SDL_GL_SwapWindow(window);
 		framesRun++;
 	}
@@ -121,6 +129,9 @@ extern "C" {
 	}
 
 	EMSCRIPTEN_KEEPALIVE double panda_frames() { return double(framesRun); }
+	// Wall time spent inside Emulator::runFrame (CPU + GPU command processing), excluding the browser's frame pacing
+	EMSCRIPTEN_KEEPALIVE double panda_emu_ms() { return emuMs; }
+	EMSCRIPTEN_KEEPALIVE u32 panda_panics() { return panics; }
 	EMSCRIPTEN_KEEPALIVE u32 panda_pc() { return emu->getCPU().getReg(15); }
 
 	// Simulate a key press from JS (tests drive input without focusing a window)
