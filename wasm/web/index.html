@@ -64,6 +64,16 @@
       statusEl.textContent = 'ready';
       const rom = new URLSearchParams(location.search).get('rom');
       if (rom) {
+        // ?sd=<url>=<path on SD card>,... copies files onto this ROM's emulated SD card (it lives at <app data>/<rom stem>/SDMC)
+        const stem = rom.split('/').pop().replace(/\.[^.]*$/, '');
+        for (const entry of (new URLSearchParams(location.search).get('sd') || '').split(',').filter(Boolean)) {
+          const [url, sdPath] = entry.split('=');
+          const dest = `/libsdl/Alber/${stem}/SDMC/${sdPath.replace(/^\/+/, '')}`;
+          let dir = '';
+          for (const part of dest.split('/').slice(1, -1)) { dir += '/' + part; try { Module.FS.mkdir(dir); } catch {} }
+          Module.FS.writeFile(dest, new Uint8Array(await (await fetch(url)).arrayBuffer()));
+          log('[web] sd: ' + dest);
+        }
         const res = await fetch(rom);
         await bootRom(rom.split('/').pop(), new Uint8Array(await res.arrayBuffer()));
       }

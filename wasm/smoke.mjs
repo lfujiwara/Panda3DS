@@ -44,7 +44,7 @@ page.on('console', (m) => logs.push(m.text()));
 page.on('pageerror', (e) => logs.push('PAGEERROR ' + e.message));
 
 const t0 = Date.now();
-await page.goto(`http://127.0.0.1:8301/index.html?rom=${encodeURIComponent(rom)}&env=${encodeURIComponent(process.env.PANDA_ENV ?? '')}`);
+await page.goto(`http://127.0.0.1:8301/index.html?rom=${encodeURIComponent(rom)}&env=${encodeURIComponent(process.env.PANDA_ENV ?? '')}&sd=${encodeURIComponent(process.env.SMOKE_SD ?? '')}`);
 try {
   await page.waitForFunction(() => window.pandaReady === true, null, { timeout: 60000 });
 } catch (e) {
