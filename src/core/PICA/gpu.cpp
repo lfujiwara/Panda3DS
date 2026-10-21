@@ -136,13 +136,16 @@ static std::array<PICA::Vertex, Renderer::vertexBufferSize> vertices;
 void GPU::drawArrays(bool indexed) {
 	PICA::DrawAcceleration accel;
 
-	if (config.accelerateShaders) {
+	// Geometry shaders only run on the CPU, so a GS draw always takes the interpreted vertex path
+	const bool gsEnabled = (regs[PICA::InternalRegs::GeometryStageConfig] & 3) == 2;
+
+	if (config.accelerateShaders && !gsEnabled) {
 		// If we are potentially going to use hw shaders, gather necessary to do vertex fetch, index buffering, etc on the GPU
 		// This includes parsing which vertices to upload, getting pointers to the index buffer data & vertex data, and so on
 		getAcceleratedDrawInfo(accel, indexed);
 	}
 
-	const bool hwShaders = renderer->prepareForDraw(shaderUnit, &accel);
+	const bool hwShaders = renderer->prepareForDraw(shaderUnit, gsEnabled ? nullptr : &accel);
 
 	if (hwShaders) {
 		// Hardware shaders have their own accelerated code path for draws, so they skip everything here
@@ -153,7 +156,7 @@ void GPU::drawArrays(bool indexed) {
 		// Note: In the hardware shader path the vertices span shouldn't actually be used as the renderer will perform its own attribute fetching
 		renderer->drawVertices(primType, std::span(vertices).first(vertexCount));
 	} else {
-		const bool shaderJITEnabled = ShaderJIT::isAvailable() && config.shaderJitEnabled;
+		const bool shaderJITEnabled = ShaderJIT::isAvailable() && config.shaderJitEnabled && !gsEnabled;
 
 		if (indexed) {
 			if (shaderJITEnabled) {
@@ -222,8 +225,12 @@ void GPU::drawArrays() {
 	const u32 inputAttrCount = (regs[PICA::InternalRegs::VertexShaderInputBufferCfg] & 0xf) + 1;
 	const u64 inputAttrCfg = getVertexShaderInputConfig();
 
+	GeometryShaderInput gsInput = setupGeometryShader();
+	if (gsInput.skipDraw) return;
+
 	// When doing indexed rendering, we have a cache of vertices to avoid processing attributes and shaders for a single vertex many times
-	constexpr bool vertexCacheEnabled = true;
+	// It caches final vertices, so it's off while a geometry shader consumes the VS outputs.
+	const bool vertexCacheEnabled = !gsInput.enabled;
 	constexpr size_t vertexCacheSize = 64;
 
 	struct {
@@ -250,7 +257,7 @@ void GPU::drawArrays() {
 		}
 
 		// Check if the vertex corresponding to the index is in cache
-		if constexpr (indexed && vertexCacheEnabled) {
+		if (indexed && vertexCacheEnabled) {
 			auto& cache = vertexCache;
 			size_t tag = vertexIndex % vertexCacheSize;
 			// Cache hit
@@ -372,6 +379,11 @@ void GPU::drawArrays() {
 			shaderUnit.vs.run();
 		}
 
+		if (gsInput.enabled) {
+			submitGeometryShaderInput(gsInput);
+			continue;
+		}
+
 		PICA::Vertex& out = vertices[i];
 		// Map shader outputs to fixed function properties
 		const u32 totalShaderOutputs = regs[PICA::InternalRegs::ShaderOutputCount] & 7;
@@ -385,7 +397,104 @@ void GPU::drawArrays() {
 		}
 	}
 
-	renderer->drawVertices(primType, std::span(vertices).first(vertexCount));
+	if (gsInput.enabled) {
+		flushGeometryShaderOutput();
+	} else {
+		renderer->drawVertices(primType, std::span(vertices).first(vertexCount));
+	}
+}
+
+GPU::GeometryShaderInput GPU::setupGeometryShader() {
+	using namespace PICA::InternalRegs;
+	GeometryShaderInput in;
+	in.enabled = (regs[GeometryStageConfig] & 3) == 2;
+	if (!in.enabled) {
+		return in;
+	}
+
+	const u32 misc = regs[GeometryShaderMisc];
+	in.mode = misc & 0xff;
+	in.vsOutputCount = (regs[VertexShaderOutmapTotal] & 0xf) + 1;
+	in.fixedVertexCount = Helpers::getBits<8, 4>(misc) + 1;
+	in.uniformStart = Helpers::getBits<16, 8>(misc);
+	in.gsInputCount = (regs[GeometryShaderInputBufferCfg] & 0xf) + 1;
+	in.submitted = 0;
+
+	if (in.mode != 0 && in.mode != 2) {
+		// ponytail: variable-primitive mode (index stream carries per-primitive vertex counts) is not implemented
+		Helpers::warn("[PICA] Unimplemented geometry shader input mode %d", in.mode);
+		in.enabled = false;
+		in.skipDraw = true;
+	}
+
+	shaderUnit.gs.emittedVertices.clear();
+	return in;
+}
+
+void GPU::submitGeometryShaderInput(GeometryShaderInput& in) {
+	using namespace PICA::InternalRegs;
+	auto& gs = shaderUnit.gs;
+
+	// VS outputs, packed by the VS output mask (same packing as vsOutputRegisters)
+	const u32 vsMask = regs[VertexShaderOutputMask] & 0xffff;
+	std::array<vec4f, 16> packed;
+	u32 count = 0;
+	for (u32 reg = 0; reg < 16 && count < in.vsOutputCount; reg++) {
+		if (vsMask & (1u << reg)) {
+			packed[count++] = shaderUnit.vs.outputs[reg];
+		}
+	}
+
+	if (in.mode == 2) {
+		// Fixed primitive mode: VS outputs of N vertices are written to consecutive GS float uniforms
+		for (u32 j = 0; j < in.vsOutputCount; j++) {
+			const u32 dst = in.uniformStart + in.submitted * in.vsOutputCount + j;
+			if (dst < gs.floatUniforms.size()) gs.floatUniforms[dst] = packed[j];
+		}
+		if (++in.submitted < in.fixedVertexCount) return;
+	} else {
+		// Point mode: VS outputs fill the GS input attributes, then map to input registers like the VS input permutation
+		const u64 inputMap = u64(regs[GeometryShaderInputCfgLow]) | (u64(regs[GeometryShaderInputCfgHigh]) << 32);
+		for (u32 j = 0; j < in.vsOutputCount; j++) {
+			const u32 attr = in.submitted * in.vsOutputCount + j;
+			if (attr < 16) gs.inputs[(inputMap >> (attr * 4)) & 0xf] = packed[j];
+		}
+		if (++in.submitted * in.vsOutputCount < in.gsInputCount) return;
+	}
+
+	in.submitted = 0;
+	gs.entrypoint = regs[GeometryShaderEntrypoint] & 0xffff;
+	gs.run();
+	gs.boolUniform |= 1u << 15;  // b15 is set by hardware after the first GS invocation of a batch
+
+	if (gs.emittedVertices.size() + 3 > Renderer::vertexBufferSize) {
+		flushGeometryShaderOutput();
+	}
+}
+
+void GPU::flushGeometryShaderOutput() {
+	using namespace PICA::InternalRegs;
+	auto& emitted = shaderUnit.gs.emittedVertices;
+	const u32 gsMask = regs[GeometryShaderOutputMask] & 0xffff;
+	const u32 totalShaderOutputs = regs[ShaderOutputCount] & 7;
+
+	usize count = std::min<usize>(emitted.size(), Renderer::vertexBufferSize);
+	for (usize v = 0; v < count; v++) {
+		PICA::Vertex& out = vertices[v];
+		u32 outputIndex = 0;
+		for (u32 reg = 0; reg < 16 && outputIndex < totalShaderOutputs; reg++) {
+			if (!(gsMask & (1u << reg))) continue;
+			const u32 config = regs[ShaderOutmap0 + outputIndex++];
+			for (int j = 0; j < 4; j++) {
+				out.raw[(config >> (j * 8)) & 0x1F] = emitted[v][reg][j];
+			}
+		}
+	}
+
+	if (count != 0) {
+		renderer->drawVertices(PICA::PrimType::TriangleList, std::span(vertices).first(count));
+	}
+	emitted.clear();
 }
 
 PICA::Vertex GPU::getImmediateModeVertex() {

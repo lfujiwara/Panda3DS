@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstring>
+#include <vector>
 
 #include "PICA/float_types.hpp"
 #include "PICA/pica_hash.hpp"
@@ -108,6 +109,15 @@ class PICAShader {
 	alignas(16) std::array<vec4f, 16> outputs;
 	alignas(16) vec4f dummy = vec4f({f24::zero(), f24::zero(), f24::zero(), f24::zero()});  // Dummy register used by the JIT
 
+	// Geometry shader primitive emitter. EMIT snapshots the output registers into slot emitVertexId; when SETEMIT armed
+	// a primitive, the 3 slots are appended to emittedVertices as one triangle (winding swaps the first two).
+	using OutputRegs = std::array<vec4f, 16>;
+	u32 emitVertexId = 0;
+	bool emitPrimitive = false;
+	bool emitWinding = false;
+	std::array<OutputRegs, 3> emitBuffer;
+	std::vector<OutputRegs> emittedVertices;
+
 	// We use a hashmap for matching 3DS shaders to their equivalent compiled code in our shader cache in the shader JIT
 	// We choose our hash type to be a 64-bit integer by default, as the collision chance is very tiny and generating it is decently optimal
 	// Ideally we want to be able to support multiple different types of hash depending on compilation settings, but let's get this working first
@@ -180,6 +190,8 @@ class PICAShader {
 	void sgei(u32 instruction);
 	void slt(u32 instruction);
 	void slti(u32 instruction);
+	void emit();
+	void setemit(u32 instruction);
 
 	// src1, src2 and src3 have different negation & component swizzle bits in the operand descriptor
 	// https://problemkaputt.github.io/gbatek.htm#3dsgpushaderinstructionsetopcodesummary in the

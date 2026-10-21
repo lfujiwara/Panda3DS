@@ -29,6 +29,8 @@ void PICAShader::run() {
 			case ShaderOpcodes::DP4: dp4(instruction); break;
 			case ShaderOpcodes::DPHI: dphi(instruction); break;
 			case ShaderOpcodes::END: return;  // Stop running shader
+			case ShaderOpcodes::EMIT: emit(); break;
+			case ShaderOpcodes::SETEMIT: setemit(instruction); break;
 			case ShaderOpcodes::EX2: ex2(instruction); break;
 			case ShaderOpcodes::FLR: flr(instruction); break;
 			case ShaderOpcodes::IFC: ifc(instruction); break;
@@ -793,4 +795,19 @@ void PICAShader::litp(u32 instruction) {
 			destVector[3 - i] = result[3 - i];
 		}
 	}
+}
+void PICAShader::emit() {
+	if (type != ShaderType::Geometry) return;
+	emitBuffer[std::min<u32>(emitVertexId, 2)] = outputs;
+	if (emitPrimitive) {
+		emittedVertices.push_back(emitBuffer[emitWinding ? 1 : 0]);
+		emittedVertices.push_back(emitBuffer[emitWinding ? 0 : 1]);
+		emittedVertices.push_back(emitBuffer[2]);
+	}
+}
+
+void PICAShader::setemit(u32 instruction) {
+	emitWinding = getBit<22>(instruction);
+	emitPrimitive = getBit<23>(instruction);
+	emitVertexId = getBits<24, 2>(instruction);
 }

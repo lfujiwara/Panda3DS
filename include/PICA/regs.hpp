@@ -211,6 +211,19 @@ namespace PICA {
 			VertexShaderOpDescriptorData5 = 0x2DB,
 			VertexShaderOpDescriptorData6 = 0x2DC,
 			VertexShaderOpDescriptorData7 = 0x2DD,
+
+			// Geometry shader unit registers mirror the vertex shader ones, 0x30 words lower (0x280-0x2AF)
+			GeometryShaderRegsStart = 0x280,
+			GeometryShaderRegsOffset = 0x30,
+			GeometryShaderInputBufferCfg = 0x289,
+			GeometryShaderEntrypoint = 0x28A,
+			GeometryShaderInputCfgLow = 0x28B,
+			GeometryShaderInputCfgHigh = 0x28C,
+			GeometryShaderOutputMask = 0x28D,
+
+			GeometryStageConfig = 0x229,  // bits 0-1 == 2: geometry shader enabled
+			VertexShaderOutmapTotal = 0x24A,
+			GeometryShaderMisc = 0x252,  // GS input mode, fixed vertex count, stride, uniform start index
 		};
 	}
 

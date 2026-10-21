@@ -58,6 +58,21 @@ class GPU {
 	// Silly method of avoiding linking problems. TODO: Change to something less silly
 	void drawArrays(bool indexed);
 
+	// Per-draw state for feeding VS outputs into the geometry shader unit
+	struct GeometryShaderInput {
+		bool enabled = false;
+		bool skipDraw = false;  // GS enabled in a mode we don't emulate
+		u32 mode = 0;           // 0 = point, 1 = variable primitive, 2 = fixed primitive
+		u32 vsOutputCount = 0;
+		u32 fixedVertexCount = 0;
+		u32 uniformStart = 0;
+		u32 gsInputCount = 0;
+		u32 submitted = 0;  // VS vertices buffered for the next GS invocation
+	};
+	GeometryShaderInput setupGeometryShader();
+	void submitGeometryShaderInput(GeometryShaderInput& in);
+	void flushGeometryShaderOutput();
+
 	struct AttribInfo {
 		u32 offset = 0;  // Offset from base vertex array
 		int size = 0;    // Bytes per vertex
@@ -128,6 +143,7 @@ class GPU {
 	// Used when processing GPU command lists
 	u32 readInternalReg(u32 index);
 	void writeInternalReg(u32 index, u32 value, u32 mask);
+	void writeShaderReg(PICAShader& shader, u32 index, u32 value, u32 newValue);
 
 	// Used for setting the size of the window we'll be outputting graphics to
 	void setOutputSize(u32 width, u32 height) { renderer->setOutputSize(width, height); }

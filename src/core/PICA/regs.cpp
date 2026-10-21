@@ -90,6 +90,15 @@ void GPU::writeInternalReg(u32 index, u32 value, u32 mask) {
 
 	// TODO: Figure out if things like the shader index use the unmasked value or the masked one
 	// We currently use the unmasked value like Citra does
+	if (index >= GeometryShaderRegsStart && index < GeometryShaderRegsStart + GeometryShaderRegsOffset) {
+		writeShaderReg(shaderUnit.gs, index + GeometryShaderRegsOffset, value, newValue);
+		return;
+	}
+	if (index >= GeometryShaderRegsStart + GeometryShaderRegsOffset && index < GeometryShaderRegsStart + 2 * GeometryShaderRegsOffset) {
+		writeShaderReg(shaderUnit.vs, index, value, newValue);
+		return;
+	}
+
 	switch (index) {
 		case SignalDrawArrays:
 			if (value != 0) drawArrays(false);
@@ -171,23 +180,6 @@ void GPU::writeInternalReg(u32 index, u32 value, u32 mask) {
 			lutIndex += 1;
 			regs[LightingLUTIndex] = (index & ~0xff) | (lutIndex & 0xff);
 
-			break;
-		}
-
-		case VertexFloatUniformIndex: {
-			shaderUnit.vs.setFloatUniformIndex(value);
-			break;
-		}
-
-		case VertexFloatUniformData0:
-		case VertexFloatUniformData1:
-		case VertexFloatUniformData2:
-		case VertexFloatUniformData3:
-		case VertexFloatUniformData4:
-		case VertexFloatUniformData5:
-		case VertexFloatUniformData6:
-		case VertexFloatUniformData7: {
-			shaderUnit.vs.uploadFloatUniform(value);
 			break;
 		}
 
@@ -283,60 +275,6 @@ void GPU::writeInternalReg(u32 index, u32 value, u32 mask) {
 
 			break;
 
-		case VertexShaderOpDescriptorIndex: {
-			shaderUnit.vs.setOpDescriptorIndex(newValue);
-			break;
-		}
-
-		case VertexShaderOpDescriptorData0:
-		case VertexShaderOpDescriptorData1:
-		case VertexShaderOpDescriptorData2:
-		case VertexShaderOpDescriptorData3:
-		case VertexShaderOpDescriptorData4:
-		case VertexShaderOpDescriptorData5:
-		case VertexShaderOpDescriptorData6:
-		case VertexShaderOpDescriptorData7: {
-			shaderUnit.vs.uploadDescriptor(value);
-			break;
-		}
-
-		case VertexBoolUniform: {
-			shaderUnit.vs.uploadBoolUniform(newValue & 0xffff);
-			break;
-		}
-
-		case VertexIntUniform0:
-		case VertexIntUniform1:
-		case VertexIntUniform2:
-		case VertexIntUniform3: {
-			shaderUnit.vs.uploadIntUniform(index - VertexIntUniform0, newValue);
-			break;
-		}
-
-		case VertexShaderData0:
-		case VertexShaderData1:
-		case VertexShaderData2:
-		case VertexShaderData3:
-		case VertexShaderData4:
-		case VertexShaderData5:
-		case VertexShaderData6:
-		case VertexShaderData7: {
-			shaderUnit.vs.uploadWord(value);
-			break;
-		}
-
-		case VertexShaderEntrypoint: {
-			shaderUnit.vs.entrypoint = newValue & 0xffff;
-			break;
-		}
-
-		/* TODO: Find out if this actually does anything
-		case VertexShaderTransferEnd:
-			if (value != 0) shaderUnit.vs.finalize();
-			break;
-		*/
-
-		case VertexShaderTransferIndex: shaderUnit.vs.setBufferIndex(newValue); break;
 
 		// Command lists can write to the command processor registers and change the command list stream
 		// Several games are known to do this, including New Super Mario Bros 2 and Super Mario 3D Land
@@ -375,6 +313,87 @@ void GPU::writeInternalReg(u32 index, u32 value, u32 mask) {
 				log("GPU: Wrote to unimplemented internal reg: %X, value: %08X\n", index, newValue);
 			}
 			break;
+	}
+}
+
+// Shader unit registers. The VS (0x2B0-0x2DF) and GS (0x280-0x2AF) units share one layout, so the GS routes here
+// with its index translated into VS register space.
+void GPU::writeShaderReg(PICAShader& shader, u32 index, u32 value, u32 newValue) {
+	using namespace PICA::InternalRegs;
+
+	switch (index) {
+		case VertexFloatUniformIndex: {
+			shader.setFloatUniformIndex(value);
+			break;
+		}
+
+		case VertexFloatUniformData0:
+		case VertexFloatUniformData1:
+		case VertexFloatUniformData2:
+		case VertexFloatUniformData3:
+		case VertexFloatUniformData4:
+		case VertexFloatUniformData5:
+		case VertexFloatUniformData6:
+		case VertexFloatUniformData7: {
+			shader.uploadFloatUniform(value);
+			break;
+		}
+
+		case VertexShaderOpDescriptorIndex: {
+			shader.setOpDescriptorIndex(newValue);
+			break;
+		}
+
+		case VertexShaderOpDescriptorData0:
+		case VertexShaderOpDescriptorData1:
+		case VertexShaderOpDescriptorData2:
+		case VertexShaderOpDescriptorData3:
+		case VertexShaderOpDescriptorData4:
+		case VertexShaderOpDescriptorData5:
+		case VertexShaderOpDescriptorData6:
+		case VertexShaderOpDescriptorData7: {
+			shader.uploadDescriptor(value);
+			break;
+		}
+
+		case VertexBoolUniform: {
+			shader.uploadBoolUniform(newValue & 0xffff);
+			break;
+		}
+
+		case VertexIntUniform0:
+		case VertexIntUniform1:
+		case VertexIntUniform2:
+		case VertexIntUniform3: {
+			shader.uploadIntUniform(index - VertexIntUniform0, newValue);
+			break;
+		}
+
+		case VertexShaderData0:
+		case VertexShaderData1:
+		case VertexShaderData2:
+		case VertexShaderData3:
+		case VertexShaderData4:
+		case VertexShaderData5:
+		case VertexShaderData6:
+		case VertexShaderData7: {
+			shader.uploadWord(value);
+			break;
+		}
+
+		case VertexShaderEntrypoint: {
+			shader.entrypoint = newValue & 0xffff;
+			break;
+		}
+
+		/* TODO: Find out if this actually does anything
+		case VertexShaderTransferEnd:
+			if (value != 0) shader.finalize();
+			break;
+		*/
+
+		case VertexShaderTransferIndex: shader.setBufferIndex(newValue); break;
+		default: break;
 	}
 }
 
