@@ -15,8 +15,9 @@
 constexpr u32 SIGTRAP = 5;
 #endif
 
-ARMul_State::ARMul_State(Memory& memory_, Kernel& kernel_, u64& ticks_, PrivilegeMode initial_mode)
-    : memory{memory_}, kernel{kernel_}, ticks{ticks_} {
+ARMul_State::ARMul_State(Memory& memory_, Kernel& kernel_, u64& ticks_, const u64& next_event_ticks_,
+                         PrivilegeMode initial_mode)
+    : memory{memory_}, kernel{kernel_}, ticks{ticks_}, next_event_ticks{next_event_ticks_} {
     Reset();
     ChangePrivilegeMode(initial_mode);
 }

@@ -3876,6 +3876,9 @@ SWI_INST: {
         cpu->CallSVC(inst_cream->num & 0xFFFF);
         // The kernel would call ERET to get here, which clears exclusive memory state.
         cpu->UnsetExclusiveMemoryAddress();
+        // The kernel may have fast-forwarded time (idle thread sleeping) or scheduled new events, so re-derive the budget
+        cpu->NumInstrsToExecute =
+            cpu->next_event_ticks > cpu->ticks ? cpu->next_event_ticks - cpu->ticks : 0;
         LOAD_NZCVT;
         goto DISPATCH;
     }

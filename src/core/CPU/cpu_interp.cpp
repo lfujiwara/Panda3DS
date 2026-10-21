@@ -9,7 +9,7 @@
 #include "emulator.hpp"
 
 CPU::CPU(Memory& mem, Kernel& kernel, Emulator& emu) : mem(mem), emu(emu), scheduler(emu.getScheduler()) {
-	state = std::make_unique<ARMul_State>(mem, kernel, scheduler.currentTimestamp, USER32MODE);
+	state = std::make_unique<ARMul_State>(mem, kernel, scheduler.currentTimestamp, scheduler.nextTimestamp, USER32MODE);
 	mem.setCPUTicks(getTicksRef());
 }
 
