@@ -16,6 +16,7 @@
 <body>
 <div>
   <input type="file" id="file" accept=".3dsx,.elf,.axf,.3ds,.cci,.cxi,.app,.ncch">
+  <label>keys <input type="file" id="sysdata" multiple title="aes_keys.txt / seeddb.bin for encrypted dumps"></label>
   <span id="status">loading…</span>
 </div>
 <div class="keys">A <kbd>L</kbd> · B <kbd>K</kbd> · X <kbd>O</kbd> · Y <kbd>I</kbd> · L/R <kbd>Q</kbd>/<kbd>P</kbd> · Start <kbd>Enter</kbd> · Select <kbd>Backspace</kbd> · D-pad arrows · Circle pad <kbd>WASD</kbd> · touch = click the bottom screen</div>
@@ -133,6 +134,17 @@
       return orig.apply(this, args);
     };
   }
+
+  // Encrypted dumps need the user's own aes_keys.txt / seeddb.bin in <app data>/sysdata; IDBFS keeps them across visits
+  document.getElementById('sysdata').addEventListener('change', async (e) => {
+    try { Module.FS.mkdir('/libsdl/Alber'); } catch {}
+    try { Module.FS.mkdir('/libsdl/Alber/sysdata'); } catch {}
+    for (const f of e.target.files) {
+      Module.FS.writeFile('/libsdl/Alber/sysdata/' + f.name, new Uint8Array(await f.arrayBuffer()));
+      log('[web] sysdata: ' + f.name);
+    }
+    await window.pandaSync();
+  });
 
   document.getElementById('file').addEventListener('change', async (e) => {
     const f = e.target.files[0];
